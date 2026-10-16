@@ -1,4 +1,4 @@
-use std::{fs, io::Read};
+use std::{fmt::format, fs, io::Read, process};
 
 const ROM_START: usize = 0x200;
 pub const SCREEN_WIDTH: usize = 64;
@@ -41,7 +41,7 @@ pub fn chip8_init(filepath: &str) -> Chip8 {
     };
 
     let mut fd = fs::File::open(filepath).unwrap();
-    fd.read_exact(&mut chip.memory[ROM_START..MEMORY_SIZE])
+    fd.read(&mut chip.memory[ROM_START..MEMORY_SIZE])
         .unwrap();
 
     let font: [u8; 80] = [
@@ -80,16 +80,40 @@ fn decode(instr: u16) -> Instruction {
     }
 }
 
-fn execute_instruction(opcode: Instruction) {}
+fn execute_instruction(opcode: &Instruction, chip : &mut Chip8) -> Result<(), String> {
+    println!("opcode : {:#X}", opcode.opcode);
+
+    match opcode.opcode {
+        0x0 => {
+            if opcode.nn == 0xE0 {
+                chip.screen.fill(false);
+            }
+            else if opcode.nn == 0xEE {
+                if chip.stack_pointer == 0 {
+                    eprintln!("Error : stack underflow");
+                }
+                chip.program_counter = chip.stack[chip.stack_pointer as usize];
+                chip.stack_pointer += 1;
+            }
+            else {
+                return Err(format!("unknown opcode : {:#X}", opcode.opcode));
+            }
+        },
+        _ => println!("impossible."),
+    }
+
+    Ok(())
+}
 
 pub fn start_emulator(chip: &mut Chip8) {
     let mut i = 0;
-    while i < 10 {
+
+    while i <= 10 {
         let opcode = decode(u16::from_be_bytes([
             chip.memory[chip.program_counter as usize],
             chip.memory[chip.program_counter as usize + 1],
         ]));
-        execute_instruction(opcode);
+        execute_instruction(&opcode, chip);
         chip.program_counter += 2;
 
         i += 1;
