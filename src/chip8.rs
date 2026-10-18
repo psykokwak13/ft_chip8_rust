@@ -41,8 +41,7 @@ pub fn chip8_init(filepath: &str) -> Chip8 {
     };
 
     let mut fd = fs::File::open(filepath).unwrap();
-    fd.read(&mut chip.memory[ROM_START..MEMORY_SIZE])
-        .unwrap();
+    fd.read(&mut chip.memory[ROM_START..MEMORY_SIZE]).unwrap();
 
     let font: [u8; 80] = [
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -80,26 +79,102 @@ fn decode(instr: u16) -> Instruction {
     }
 }
 
-fn execute_instruction(opcode: &Instruction, chip : &mut Chip8) -> Result<(), String> {
-    println!("opcode : {:#X}", opcode.opcode);
+fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), String> {
+    // println!("opcode : {:#X}", opcode.opcode);
 
-    match opcode.opcode {
+    match opcode.t {
         0x0 => {
             if opcode.nn == 0xE0 {
                 chip.screen.fill(false);
-            }
-            else if opcode.nn == 0xEE {
+            } else if opcode.nn == 0xEE {
                 if chip.stack_pointer == 0 {
-                    eprintln!("Error : stack underflow");
+                    return Err("stack underflow".to_string());
                 }
+                chip.stack_pointer -= 1;
                 chip.program_counter = chip.stack[chip.stack_pointer as usize];
-                chip.stack_pointer += 1;
-            }
-            else {
+            } else {
                 return Err(format!("unknown opcode : {:#X}", opcode.opcode));
             }
-        },
-        _ => println!("impossible."),
+        }
+        0x1 => chip.program_counter = opcode.nnn,
+        0x2 => {
+            if chip.stack_pointer >= 16 {
+                return Err("stack overflow".to_string());
+            }
+            chip.stack[chip.stack_pointer as usize] = chip.program_counter;
+            chip.stack_pointer += 1;
+            chip.program_counter = opcode.nnn;
+        }
+        0x3 => {
+            if chip.registers[opcode.x as usize] == opcode.nn {
+                chip.program_counter += 2;
+            }
+        }
+        0x4 => {
+            if chip.registers[opcode.x as usize] != opcode.nn {
+                chip.program_counter += 2;
+            }
+        }
+        0x5 => {
+            if chip.registers[opcode.x as usize] == chip.registers[opcode.y as usize] {
+                chip.program_counter += 2;
+            }
+        }
+        0x6 => chip.registers[opcode.x as usize] = opcode.nn,
+        0x7 => chip.registers[opcode.x as usize] += opcode.nn,
+        0x8 => {
+            match opcode.n {
+                0x0 => chip.registers[opcode.x as usize] = chip.registers[opcode.y as usize],
+                0x1 => chip.registers[opcode.x as usize] |= chip.registers[opcode.y as usize],
+                0x2 => chip.registers[opcode.x as usize] &= chip.registers[opcode.y as usize],
+                0x3 => chip.registers[opcode.x as usize] ^= chip.registers[opcode.y as usize],
+                0x4 => {
+                    if chip.registers[opcode.x as usize] + chip.registers[opcode.y as usize] > 255 {
+                        chip.registers[0xF] = 1;
+                    } else {
+                        chip.registers[0xF] = 0;
+                    }
+                    chip.registers[opcode.x as usize] += chip.registers[opcode.y as usize];
+                }
+                0x5 => {
+                    if chip.registers[opcode.x as usize] >= chip.registers[opcode.y as usize] {
+                        chip.registers[0xF] = 1;
+                    } else {
+                        chip.registers[0xF] = 0;
+                    }
+                    chip.registers[opcode.x as usize] -= chip.registers[opcode.y as usize];
+                }
+                0x6 => {
+                    chip.registers[0xF] = chip.registers[opcode.x as usize] & 0x1;
+                    chip.registers[opcode.x as usize] >>= 1;
+                }
+                0x7 => {
+                    if chip.registers[opcode.y as usize] >= chip.registers[opcode.x as usize] {
+                        chip.registers[0xF] = 1;
+                    } else {
+                        chip.registers[0xF] = 0;
+                    }
+                    chip.registers[opcode.x as usize] =
+                        chip.registers[opcode.y as usize] - chip.registers[opcode.x as usize];
+                }
+                0xE => {
+                    chip.registers[0xF] = (chip.registers[opcode.x as usize] & 0x80) >> 7;
+                    chip.registers[opcode.x as usize] <<= 1;
+                }
+            };
+        }
+        0x9 => {
+            if chip.registers[opcode.x as usize] != chip.registers[opcode.y as usize] {
+                chip.program_counter += 2;
+            }
+        }
+        0xA => chip.index_register = opcode.nnn,
+        0xB => ,
+        0xC => ,
+        0xD => ,
+        0xE => ,
+        0xF => ,
+        _ => unreachable!(), // program panic if we reach this macro
     }
 
     Ok(())
