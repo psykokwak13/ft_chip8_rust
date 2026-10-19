@@ -1,10 +1,8 @@
 mod chip8;
 
-use crate::chip8::{SCREEN_HEIGHT, SCREEN_WIDTH, chip8_init, start_emulator};
+use crate::chip8::{Chip8, SCALE, SCREEN_HEIGHT, SCREEN_WIDTH, start_emulator};
 use macroquad::prelude::*;
 use std::{env, io, process};
-
-const SCALE: usize = 15;
 
 #[macroquad::main("chip-8")]
 async fn main() -> io::Result<()> {
@@ -21,7 +19,7 @@ async fn main() -> io::Result<()> {
         (SCREEN_HEIGHT * SCALE) as f32,
     );
 
-    let mut chip = chip8_init(&argv.next_back().unwrap());
+    let mut chip = Chip8::new(&argv.next_back().unwrap())?;
 
     loop {
         clear_background(BLACK);

@@ -1,14 +1,38 @@
-use std::{fmt::format, fs, io::Read, process};
+use macroquad::{color::GREEN, miniquad::PassAction::Nothing, shapes::draw_rectangle};
+use rand::{prelude::*, rng};
+use std::{fs, io};
 
 const ROM_START: usize = 0x200;
 pub const SCREEN_WIDTH: usize = 64;
 pub const SCREEN_HEIGHT: usize = 32;
+pub const SCALE: usize = 15;
 pub const MEMORY_SIZE: usize = 4 * 1024;
+
+const FONT_START: usize = 0x50;
+const FONT: [u8; 80] = [
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+];
 
 pub struct Chip8 {
     memory: [u8; MEMORY_SIZE],
-    screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT],
+    screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT], // only 0 or 1
     keyboard: [bool; 16],
+    waiting_key_register: u8,
     stack: [u16; 16],
     stack_pointer: u8,
     program_counter: u16,
@@ -27,44 +51,31 @@ pub struct Instruction {
     nnn: u16,
 }
 
-pub fn chip8_init(filepath: &str) -> Chip8 {
-    let mut chip = Chip8 {
-        memory: [0; MEMORY_SIZE],
-        screen: [false; SCREEN_WIDTH * SCREEN_HEIGHT],
-        keyboard: [false; 16],
-        stack: [0; 16],
-        stack_pointer: 0,
-        program_counter: ROM_START as u16,
-        index_register: 0,
-        registers: [0; 16],
-        delay_timer: 0,
-    };
+impl Chip8 {
+    pub fn new(filepath: &str) -> Result<Chip8, std::io::Error> {
+        let mut chip = Chip8 {
+            memory: [0; MEMORY_SIZE],
+            screen: [false; SCREEN_WIDTH * SCREEN_HEIGHT],
+            keyboard: [false; 16],
+            waiting_key_register: 0,
+            stack: [0; 16],
+            stack_pointer: 0,
+            program_counter: ROM_START as u16,
+            index_register: 0,
+            registers: [0; 16],
+            delay_timer: 0,
+        };
 
-    let mut fd = fs::File::open(filepath).unwrap();
-    fd.read(&mut chip.memory[ROM_START..MEMORY_SIZE]).unwrap();
+        let rom = fs::read(filepath)?;
+        if rom.len() > MEMORY_SIZE - ROM_START {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "ROM too large"));
+        }
+        chip.memory[ROM_START..ROM_START + rom.len()].copy_from_slice(&rom);
 
-    let font: [u8; 80] = [
-        0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-        0x20, 0x60, 0x20, 0x20, 0x70, // 1
-        0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-        0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-        0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-        0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-        0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-        0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-        0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-        0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-        0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-        0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-        0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-        0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-        0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-        0xF0, 0x80, 0xF0, 0x80, 0x80, // F
-    ];
+        chip.memory[FONT_START..FONT_START + 80].copy_from_slice(&FONT);
 
-    chip.memory[0x50..0x50 + 80].copy_from_slice(&font);
-
-    chip
+        Ok(chip)
+    }
 }
 
 fn decode(instr: u16) -> Instruction {
@@ -79,8 +90,27 @@ fn decode(instr: u16) -> Instruction {
     }
 }
 
+fn draw(chip: &mut Chip8, opcode: &Instruction) {
+    chip.registers[0xF] = 0;
+    for row in 0..opcode.n {
+        let sprite_byte = chip.memory[chip.index_register as usize + row as usize];
+        for col in 0..8 {
+            let sprite_pixel = (sprite_byte >> (7 - col)) & 0x1;
+            if sprite_pixel != 0 {
+                let x = (chip.registers[opcode.x as usize] as usize + col as usize) % SCREEN_WIDTH;
+                let y = (chip.registers[opcode.y as usize] as usize + row as usize) % SCREEN_HEIGHT;
+                let index: usize = y * 64 + x;
+                if chip.screen[index] {
+                    chip.registers[0xF] = 1;
+                }
+                chip.screen[index] ^= true;
+            }
+        }
+    }
+}
+
 fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), String> {
-    // println!("opcode : {:#X}", opcode.opcode);
+    println!("opcode : {:#X}", opcode.opcode);
 
     match opcode.t {
         0x0 => {
@@ -129,38 +159,33 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
                 0x2 => chip.registers[opcode.x as usize] &= chip.registers[opcode.y as usize],
                 0x3 => chip.registers[opcode.x as usize] ^= chip.registers[opcode.y as usize],
                 0x4 => {
-                    if chip.registers[opcode.x as usize] + chip.registers[opcode.y as usize] > 255 {
-                        chip.registers[0xF] = 1;
-                    } else {
-                        chip.registers[0xF] = 0;
-                    }
-                    chip.registers[opcode.x as usize] += chip.registers[opcode.y as usize];
+                    let (result, carry) = chip.registers[opcode.x as usize].overflowing_add(chip.registers[opcode.y as usize]);
+                    chip.registers[opcode.x as usize] = result;
+                    chip.registers[0xF] = carry as u8; 
                 }
                 0x5 => {
-                    if chip.registers[opcode.x as usize] >= chip.registers[opcode.y as usize] {
-                        chip.registers[0xF] = 1;
-                    } else {
-                        chip.registers[0xF] = 0;
-                    }
-                    chip.registers[opcode.x as usize] -= chip.registers[opcode.y as usize];
+                    let (result, carry) = chip.registers[opcode.x as usize].overflowing_sub(chip.registers[opcode.y as usize]);
+                    chip.registers[opcode.x as usize] = result;
+                    chip.registers[0xF] = !carry as u8;
                 }
                 0x6 => {
                     chip.registers[0xF] = chip.registers[opcode.x as usize] & 0x1;
                     chip.registers[opcode.x as usize] >>= 1;
+
+                    let bit = chip.registers[opcode.x as usize] & 0x1;
+                    chip.registers[opcode.x as usize] >>= 1;
+                    chip.registers[0xF] = bit;
                 }
                 0x7 => {
-                    if chip.registers[opcode.y as usize] >= chip.registers[opcode.x as usize] {
-                        chip.registers[0xF] = 1;
-                    } else {
-                        chip.registers[0xF] = 0;
-                    }
-                    chip.registers[opcode.x as usize] =
-                        chip.registers[opcode.y as usize] - chip.registers[opcode.x as usize];
+                    let (result, carry) = chip.registers[opcode.y as usize].overflowing_sub(chip.registers[opcode.x as usize]);
+                    chip.registers[opcode.x as usize] = result;
+                    chip.registers[0xF] = !carry as u8;
                 }
                 0xE => {
                     chip.registers[0xF] = (chip.registers[opcode.x as usize] & 0x80) >> 7;
                     chip.registers[opcode.x as usize] <<= 1;
                 }
+                _ => return Err("wrong opcode".to_string()),
             };
         }
         0x9 => {
@@ -169,15 +194,63 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
             }
         }
         0xA => chip.index_register = opcode.nnn,
-        0xB => ,
-        0xC => ,
-        0xD => ,
-        0xE => ,
-        0xF => ,
+        0xB => chip.program_counter = opcode.nnn + chip.registers[0] as u16,
+        0xC => chip.registers[opcode.x as usize] = rng().random::<u8>() & opcode.nn,
+        0xD => draw(chip, opcode),
+        0xE => match opcode.nn {
+            0x9E => {
+                if chip.keyboard[chip.registers[opcode.x as usize] as usize] {
+                    chip.program_counter += 2;
+                }
+            }
+            0xA1 => {
+                if !chip.keyboard[chip.registers[opcode.x as usize] as usize] {
+                    chip.program_counter += 2;
+                }
+            }
+            _ => return Err("wrong opcode".to_string()),
+        },
+        0xF => match opcode.nn {
+            0x07 => chip.registers[opcode.x as usize] = chip.delay_timer,
+            0x0A => chip.waiting_key_register = opcode.x,
+            0x15 => chip.delay_timer = chip.registers[opcode.x as usize],
+            0x18 => {},
+            0x1E => chip.index_register += chip.registers[opcode.x as usize] as u16,
+            0x29 => chip.index_register = 0x50 + chip.registers[opcode.x as usize] as u16 * 5,
+            0x33 => {
+                let nbr: u8 = chip.registers[opcode.x as usize];
+                chip.memory[chip.index_register as usize] = nbr / 100;
+                chip.memory[chip.index_register as usize + 1] = (nbr / 10) % 10;
+                chip.memory[chip.index_register as usize + 2] = nbr % 10;
+            }
+            0x55 => {
+                for i in 0..opcode.x + 1 {
+                    chip.memory[chip.index_register as usize + i as usize] =
+                        chip.registers[i as usize];
+                }
+            }
+            0x65 => {
+                for i in 0..opcode.x + 1 {
+                    chip.registers[i as usize] =
+                        chip.memory[chip.index_register as usize + i as usize];
+                }
+            }
+            _ => return Err("wrong opcode".to_string()),
+        },
         _ => unreachable!(), // program panic if we reach this macro
     }
 
     Ok(())
+}
+
+fn put_on_screen(screen : &[bool; SCREEN_WIDTH * SCREEN_HEIGHT]) {
+    for y in 0..32 {
+        for x in 0..64 {
+            if screen[y * 64 + x] {
+                draw_rectangle(x as f32 * SCALE as f32, y as f32 * SCALE as f32, SCALE as f32, SCALE as f32, GREEN);
+            }
+        }
+    }
 }
 
 pub fn start_emulator(chip: &mut Chip8) {
@@ -188,9 +261,14 @@ pub fn start_emulator(chip: &mut Chip8) {
             chip.memory[chip.program_counter as usize],
             chip.memory[chip.program_counter as usize + 1],
         ]));
-        execute_instruction(&opcode, chip);
         chip.program_counter += 2;
+        execute_instruction(&opcode, chip).unwrap();
+        put_on_screen(&chip.screen);
 
         i += 1;
+    }
+
+    if chip.delay_timer > 0 {
+        chip.delay_timer -= 1;
     }
 }
