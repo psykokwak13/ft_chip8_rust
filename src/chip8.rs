@@ -1,4 +1,4 @@
-use macroquad::{color::GREEN, miniquad::PassAction::Nothing, shapes::draw_rectangle};
+use macroquad::{color::GREEN, miniquad::ElapsedQuery, shapes::draw_rectangle};
 use rand::{prelude::*, rng};
 use std::{fs, io};
 
@@ -30,9 +30,9 @@ const FONT: [u8; 80] = [
 
 pub struct Chip8 {
     memory: [u8; MEMORY_SIZE],
-    screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT], // only 0 or 1
-    keyboard: [bool; 16],
-    waiting_key_register: u8,
+    pub screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT], // only 0 or 1
+    pub keyboard: [bool; 16],
+    waiting_key_register: Option<usize>,
     stack: [u16; 16],
     stack_pointer: u8,
     program_counter: u16,
@@ -57,7 +57,7 @@ impl Chip8 {
             memory: [0; MEMORY_SIZE],
             screen: [false; SCREEN_WIDTH * SCREEN_HEIGHT],
             keyboard: [false; 16],
-            waiting_key_register: 0,
+            waiting_key_register: None,
             stack: [0; 16],
             stack_pointer: 0,
             program_counter: ROM_START as u16,
@@ -76,6 +76,14 @@ impl Chip8 {
 
         Ok(chip)
     }
+}
+
+pub fn put_key_in_register(key: u8, chip: &mut Chip8) {
+    let instr = decode(u16::from_be_bytes([
+        chip.memory[chip.program_counter as usize],
+        chip.memory[chip.program_counter as usize + 1],
+    ]));
+    chip.registers[instr.x as usize] = key;
 }
 
 fn decode(instr: u16) -> Instruction {
@@ -151,7 +159,10 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
             }
         }
         0x6 => chip.registers[opcode.x as usize] = opcode.nn,
-        0x7 => chip.registers[opcode.x as usize] += opcode.nn,
+        0x7 => {
+            chip.registers[opcode.x as usize] =
+                chip.registers[opcode.x as usize].wrapping_add(opcode.nn)
+        }
         0x8 => {
             match opcode.n {
                 0x0 => chip.registers[opcode.x as usize] = chip.registers[opcode.y as usize],
@@ -159,25 +170,25 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
                 0x2 => chip.registers[opcode.x as usize] &= chip.registers[opcode.y as usize],
                 0x3 => chip.registers[opcode.x as usize] ^= chip.registers[opcode.y as usize],
                 0x4 => {
-                    let (result, carry) = chip.registers[opcode.x as usize].overflowing_add(chip.registers[opcode.y as usize]);
+                    let (result, carry) = chip.registers[opcode.x as usize]
+                        .overflowing_add(chip.registers[opcode.y as usize]);
                     chip.registers[opcode.x as usize] = result;
-                    chip.registers[0xF] = carry as u8; 
+                    chip.registers[0xF] = carry as u8;
                 }
                 0x5 => {
-                    let (result, carry) = chip.registers[opcode.x as usize].overflowing_sub(chip.registers[opcode.y as usize]);
+                    let (result, carry) = chip.registers[opcode.x as usize]
+                        .overflowing_sub(chip.registers[opcode.y as usize]);
                     chip.registers[opcode.x as usize] = result;
                     chip.registers[0xF] = !carry as u8;
                 }
                 0x6 => {
-                    chip.registers[0xF] = chip.registers[opcode.x as usize] & 0x1;
-                    chip.registers[opcode.x as usize] >>= 1;
-
                     let bit = chip.registers[opcode.x as usize] & 0x1;
                     chip.registers[opcode.x as usize] >>= 1;
                     chip.registers[0xF] = bit;
                 }
                 0x7 => {
-                    let (result, carry) = chip.registers[opcode.y as usize].overflowing_sub(chip.registers[opcode.x as usize]);
+                    let (result, carry) = chip.registers[opcode.y as usize]
+                        .overflowing_sub(chip.registers[opcode.x as usize]);
                     chip.registers[opcode.x as usize] = result;
                     chip.registers[0xF] = !carry as u8;
                 }
@@ -212,9 +223,9 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
         },
         0xF => match opcode.nn {
             0x07 => chip.registers[opcode.x as usize] = chip.delay_timer,
-            0x0A => chip.waiting_key_register = opcode.x,
+            0x0A => chip.waiting_key_register = Some(opcode.x as usize),
             0x15 => chip.delay_timer = chip.registers[opcode.x as usize],
-            0x18 => {},
+            0x18 => {}
             0x1E => chip.index_register += chip.registers[opcode.x as usize] as u16,
             0x29 => chip.index_register = 0x50 + chip.registers[opcode.x as usize] as u16 * 5,
             0x33 => {
@@ -243,28 +254,25 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
     Ok(())
 }
 
-fn put_on_screen(screen : &[bool; SCREEN_WIDTH * SCREEN_HEIGHT]) {
-    for y in 0..32 {
-        for x in 0..64 {
-            if screen[y * 64 + x] {
-                draw_rectangle(x as f32 * SCALE as f32, y as f32 * SCALE as f32, SCALE as f32, SCALE as f32, GREEN);
-            }
-        }
-    }
-}
-
 pub fn start_emulator(chip: &mut Chip8) {
     let mut i = 0;
 
     while i <= 10 {
+        if let Some(x) = chip.waiting_key_register {
+            if let Some(check) = chip.keyboard.iter().position(|y| *y) {
+                chip.registers[x] = check as u8;
+                chip.waiting_key_register = None;
+            }
+            else {
+                break;
+            }
+        }
         let opcode = decode(u16::from_be_bytes([
             chip.memory[chip.program_counter as usize],
             chip.memory[chip.program_counter as usize + 1],
         ]));
         chip.program_counter += 2;
         execute_instruction(&opcode, chip).unwrap();
-        put_on_screen(&chip.screen);
-
         i += 1;
     }
 
