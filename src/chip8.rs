@@ -1,6 +1,4 @@
-use macroquad::{color::GREEN, miniquad::ElapsedQuery, shapes::draw_rectangle};
 use rand::{prelude::*, rng};
-use std::{fs, io};
 
 const ROM_START: usize = 0x200;
 pub const SCREEN_WIDTH: usize = 64;
@@ -28,19 +26,6 @@ const FONT: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-pub struct Chip8 {
-    memory: [u8; MEMORY_SIZE],
-    pub screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT], // only 0 or 1
-    pub keyboard: [bool; 16],
-    waiting_key_register: Option<usize>,
-    stack: [u16; 16],
-    stack_pointer: u8,
-    program_counter: u16,
-    index_register: u16,
-    registers: [u8; 16], // chip8 registers
-    delay_timer: u8,
-}
-
 pub struct Instruction {
     opcode: u16,
     t: u8,
@@ -51,6 +36,20 @@ pub struct Instruction {
     nnn: u16,
 }
 
+pub struct Chip8 {
+    memory: [u8; MEMORY_SIZE],
+    pub screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT], // only 0 or 1
+    pub keyboard: [bool; 16],
+    waiting_key_register: Option<usize>,
+    state_key: bool,
+    stack: [u16; 16],
+    stack_pointer: u8,
+    program_counter: u16,
+    index_register: u16,
+    registers: [u8; 16], // chip8 registers
+    delay_timer: u8,
+}
+
 impl Chip8 {
     pub fn new(filepath: &str) -> Result<Chip8, std::io::Error> {
         let mut chip = Chip8 {
@@ -58,6 +57,7 @@ impl Chip8 {
             screen: [false; SCREEN_WIDTH * SCREEN_HEIGHT],
             keyboard: [false; 16],
             waiting_key_register: None,
+            state_key: false,
             stack: [0; 16],
             stack_pointer: 0,
             program_counter: ROM_START as u16,
@@ -66,9 +66,12 @@ impl Chip8 {
             delay_timer: 0,
         };
 
-        let rom = fs::read(filepath)?;
+        let rom = std::fs::read(filepath)?;
         if rom.len() > MEMORY_SIZE - ROM_START {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "ROM too large"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ROM too large",
+            ));
         }
         chip.memory[ROM_START..ROM_START + rom.len()].copy_from_slice(&rom);
 
@@ -76,14 +79,6 @@ impl Chip8 {
 
         Ok(chip)
     }
-}
-
-pub fn put_key_in_register(key: u8, chip: &mut Chip8) {
-    let instr = decode(u16::from_be_bytes([
-        chip.memory[chip.program_counter as usize],
-        chip.memory[chip.program_counter as usize + 1],
-    ]));
-    chip.registers[instr.x as usize] = key;
 }
 
 fn decode(instr: u16) -> Instruction {
@@ -118,7 +113,7 @@ fn draw(chip: &mut Chip8, opcode: &Instruction) {
 }
 
 fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), String> {
-    println!("opcode : {:#X}", opcode.opcode);
+    // println!("opcode : {:#X}", opcode.opcode);
 
     match opcode.t {
         0x0 => {
@@ -257,15 +252,17 @@ fn execute_instruction(opcode: &Instruction, chip: &mut Chip8) -> Result<(), Str
 pub fn start_emulator(chip: &mut Chip8) {
     let mut i = 0;
 
-    while i <= 10 {
+    while i < 10 {
         if let Some(x) = chip.waiting_key_register {
             if let Some(check) = chip.keyboard.iter().position(|y| *y) {
                 chip.registers[x] = check as u8;
+                chip.state_key = true;
+            }
+            if chip.state_key && !chip.keyboard[chip.registers[x] as usize] {
                 chip.waiting_key_register = None;
+                chip.state_key = false;
             }
-            else {
-                break;
-            }
+            break;
         }
         let opcode = decode(u16::from_be_bytes([
             chip.memory[chip.program_counter as usize],
