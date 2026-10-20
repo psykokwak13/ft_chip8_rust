@@ -12,7 +12,7 @@ fn put_on_screen(screen: &[bool; SCREEN_WIDTH * SCREEN_HEIGHT]) {
                     y as f32 * SCALE as f32,
                     SCALE as f32,
                     SCALE as f32,
-                    GREEN,
+                    ORANGE,
                 );
             }
         }
