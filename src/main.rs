@@ -3,6 +3,8 @@ mod chip8;
 use crate::chip8::{Chip8, SCALE, SCREEN_HEIGHT, SCREEN_WIDTH, start_emulator};
 use macroquad::{input::KeyCode::*, prelude::*};
 
+const STEP: f32 = 1.0 / 60.0;
+
 fn put_on_screen(screen: &[bool; SCREEN_WIDTH * SCREEN_HEIGHT]) {
     for y in 0..32 {
         for x in 0..64 {
@@ -60,6 +62,7 @@ async fn main() -> std::io::Result<()> {
     );
 
     let mut chip = Chip8::new(&argv.next_back().unwrap())?;
+    let mut accumulator = 0.0;
 
     loop {
         if is_key_pressed(Escape) {
@@ -67,7 +70,11 @@ async fn main() -> std::io::Result<()> {
         }
 
         handle_key(&mut chip);
-        start_emulator(&mut chip);
+        accumulator += get_frame_time();
+        while accumulator >= STEP {
+            start_emulator(&mut chip);
+            accumulator -= STEP;
+        }
         chip.keyboard.fill(false);
         clear_background(BLACK);
         put_on_screen(&chip.screen);
